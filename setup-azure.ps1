@@ -20,10 +20,7 @@
 .NOTES
     Requirements:
       - PowerShell 7+
-      - Module: Microsoft.Graph.Authentication  (Install-Module Microsoft.Graph.Authentication)
-      - Module: Az.Accounts                     (Install-Module Az.Accounts)
-      - Module: Az.Resources                    (Install-Module Az.Resources)
-      - Module: Az.Websites                     (Install-Module Az.Websites)
+      - Internet access (modules are installed automatically on first run)
 
     The signed-in account must be a Global Administrator or
     Privileged Role Administrator in the Entra tenant to grant
@@ -116,10 +113,14 @@ function Invoke-GraphRequest {
 }
 
 # ==============================================================
-# SECTION 1 — PREREQUISITES CHECK
+# SECTION 1 — MODULE INSTALLATION
 # ==============================================================
 
-Write-Step "Checking prerequisites"
+Write-Step "Checking and installing required PowerShell modules"
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "PowerShell 7 or higher is required. Download: https://aka.ms/powershell"
+}
 
 $requiredModules = @(
     "Microsoft.Graph.Authentication",
@@ -128,17 +129,44 @@ $requiredModules = @(
     "Az.Websites"
 )
 
-$missingModules = $requiredModules | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
-
-if ($missingModules.Count -gt 0) {
-    Write-Error @"
-The following PowerShell modules are missing:
-$($missingModules -join "`n")
-
-Install them with:
-    Install-Module $($missingModules -join ", ") -Scope CurrentUser -Force
-"@
+# Ensure PSGallery is trusted so Install-Module runs without interactive prompts
+$gallery = Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue
+if ($gallery -and $gallery.InstallationPolicy -ne "Trusted") {
+    Write-Host "    Trusting PSGallery repository..." -ForegroundColor Yellow
+    Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
 }
+
+foreach ($moduleName in $requiredModules) {
+    $installed = Get-Module -ListAvailable -Name $moduleName | Select-Object -First 1
+
+    if ($installed) {
+        # Check if a newer version is available and update silently
+        try {
+            $online = Find-Module -Name $moduleName -ErrorAction Stop
+            if ([version]$online.Version -gt [version]$installed.Version) {
+                Write-Host "    Updating $moduleName ($($installed.Version) -> $($online.Version))..." -ForegroundColor Yellow
+                if ($PSCmdlet.ShouldProcess($moduleName, "Update module")) {
+                    Update-Module -Name $moduleName -Scope CurrentUser -Force
+                }
+            } else {
+                Write-Ok "$moduleName $($installed.Version) (up to date)"
+            }
+        } catch {
+            # PSGallery not reachable — use the installed version
+            Write-Ok "$moduleName $($installed.Version) (installed, skipping update check)"
+        }
+    } else {
+        Write-Host "    Installing $moduleName..." -ForegroundColor Yellow
+        if ($PSCmdlet.ShouldProcess($moduleName, "Install module")) {
+            Install-Module -Name $moduleName -Scope CurrentUser -Force -AllowClobber
+            Write-Ok "$moduleName installed"
+        }
+    }
+
+    Import-Module -Name $moduleName -ErrorAction Stop
+}
+
+Write-Ok "All modules ready"
 
 Write-Ok "All required modules present"
 
